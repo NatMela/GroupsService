@@ -27,13 +27,13 @@ class GroupsService @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroupsDAO
     }
   }
 
-  def getGroupsStream() = {
+  /*def getGroupsStream() = {
     val result = dbConfig.db().stream(groupsDAO.getGroups()).mapResult {
       groupsRow =>
         GroupsDTO(id = groupsRow.id, title = groupsRow.title, createdAt = Some(groupsRow.createdAt.toString), description = groupsRow.description)
     }
     Source.fromPublisher(result)
-  }
+  }*/
 
   def getGroupsFromPage(pageSize: Int, pageNumber: Int): Future[GroupsFromPage] = {
     val result = groupsDAO.getGroupsFromPage(pageNumber, pageSize)

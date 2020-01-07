@@ -80,9 +80,11 @@ trait Links extends JsonSupport {
     ).build
   }
 
-  def toResources(groups: Source[GroupsDTO, NotUsed]): JsValue = {
+  def toResources(groups: Seq[GroupsDTO]): JsValue = {
     ResourceBuilder(
-      withData = Some(groups.toString().toJson),
+      withEmbedded = Some(Map(
+        "groups" -> groups.map(f => toResource(f))
+      )),
       withLinks = Some(Map(
         groupsAllLink(Self),
         groupsLink(Up, "1", "1")))
@@ -129,7 +131,7 @@ trait Links extends JsonSupport {
 }
 
 
-@Path("/groups")
+@Path("/groupsService")
 @Api(value = "Groups Controller")
 class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroupsDAO, dbConfig: Db) extends JsonSupport with Links {
 
@@ -153,7 +155,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 400, message = "Bad request passed to the endpoint"),
     new ApiResponse(code = 200, message = "Step performed successfully")
   ))
-  @Path("/paths")
+  @Path("/")
   def getAllPaths: Route =
     pathEnd {
       get {
@@ -168,12 +170,12 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 400, message = "Bad request passed to the endpoint"),
     new ApiResponse(code = 200, message = "Step performed successfully")
   ))
-  @Path("/all")
+  @Path("groups/all")
   def getAllGroups: Route =
     pathEnd {
       get {
         complete {
-          service.getGroupsStream() match {
+          service.getGroups map {
             case response => Marshal(toResources(response)).to[HttpResponse]
             case _ => Marshal(StatusCodes.NoContent).to[HttpResponse]
           }
@@ -190,7 +192,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 400, message = "Bad request passed to the endpoint"),
     new ApiResponse(code = 200, message = "Step performed successfully")
   ))
-  @Path("/")
+  @Path("/groups")
   def getGroupsFromPage: Route =
     pathEnd {
       get {
@@ -233,7 +235,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 200, message = "Step performed successfully"),
     new ApiResponse(code = 204, message = "No group with such id was found")
   ))
-  @Path("/{id}")
+  @Path("/groups/{id}")
   def getGroupById(@ApiParam(hidden = true) id: Int): Route =
     pathEnd {
       get {
@@ -278,7 +280,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 200, message = "Step performed successfully"),
     new ApiResponse(code = 204, message = "No group with such id was found")
   ))
-  @Path("/{id}")
+  @Path("/groups/{id}")
   def updateGroupById(@ApiParam(hidden = true) id: Int): Route =
     pathEnd {
       put {
@@ -302,7 +304,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 200, message = "Step performed successfully"),
     new ApiResponse(code = 204, message = "No group with such id was found")
   ))
-  @Path("/{id}")
+  @Path("/groups/{id}")
   def updateOneFieldInGroupById(@ApiParam(hidden = true) id: Int): Route =
     pathEnd {
       patch {
@@ -324,7 +326,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 400, message = "Bad request passed to the endpoint"),
     new ApiResponse(code = 200, message = "Step performed successfully")
   ))
-  @Path("/{id}")
+  @Path("/groups/{id}")
   def deleteGroup(id: Int): Route =
     pathEnd {
       delete {
@@ -344,7 +346,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 400, message = "Bad request passed to the endpoint"),
     new ApiResponse(code = 200, message = "Step performed successfully")
   ))
-  @Path("/{groupId}/users/{userId}")
+  @Path("/groups/{groupId}/users/{userId}")
   def deleteGroupForUser(groupId: Int, userId: Int): Route =
     pathEnd {
       delete {
@@ -364,7 +366,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 400, message = "Bad request passed to the endpoint"),
     new ApiResponse(code = 201, message = "Step performed successfully")
   ))
-  @Path("/")
+  @Path("/groups")
   def insertGroup(): Route =
     pathEnd {
       post {
@@ -388,7 +390,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 400, message = "Bad request passed to the endpoint"),
     new ApiResponse(code = 200, message = "Step performed successfully")
   ))
-  @Path("/{groupId}/users/{userId}")
+  @Path("/groups/{groupId}/users/{userId}")
   def addGroupForUser(@ApiParam(hidden = true) groupId: Int, @ApiParam(hidden = true) userId: Int): Route =
     pathEnd {
       post {
@@ -413,7 +415,7 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     new ApiResponse(code = 200, message = "Step performed successfully"),
     new ApiResponse(code = 204, message = "No user with such id was found")
   ))
-  @Path("/{id}/details")
+  @Path("/groups/{id}/details")
   def getGroupDetails(@ApiParam(hidden = true) id: Int): Route =
     pathEnd {
       get {
@@ -427,30 +429,30 @@ class GroupsController @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroups
     }
 
   lazy val groupRoutes: Route = {
-    pathPrefix("groups") {
-      getGroupsFromPage ~
-        insertGroup() ~
-        pathPrefix("all") {
-          getAllGroups
-        } ~
-        pathPrefix("paths") {
-          getAllPaths
-        } ~
-        pathPrefix(IntNumber) { groupId =>
-          getGroupById(groupId) ~
-            updateGroupById(groupId) ~
-            updateOneFieldInGroupById(groupId) ~
-            deleteGroup(groupId) ~
-            pathPrefix("users") {
-              pathPrefix(IntNumber) { userId =>
-                deleteGroupForUser(userId, groupId) ~
-                  addGroupForUser(groupId, userId)
+    pathPrefix("groupsService") {
+      getAllPaths ~
+      pathPrefix("groups") {
+        getGroupsFromPage ~
+          insertGroup() ~
+          pathPrefix("all") {
+            getAllGroups
+          } ~
+          pathPrefix(IntNumber) { groupId =>
+            getGroupById(groupId) ~
+              updateGroupById(groupId) ~
+              updateOneFieldInGroupById(groupId) ~
+              deleteGroup(groupId) ~
+              pathPrefix("users") {
+                pathPrefix(IntNumber) { userId =>
+                  deleteGroupForUser(userId, groupId) ~
+                    addGroupForUser(groupId, userId)
+                }
+              } ~
+              pathPrefix("details") {
+                getGroupDetails(groupId)
               }
-            } ~
-            pathPrefix("details") {
-              getGroupDetails(groupId)
-            }
-        }
+          }
+      }
     }
   }
 }
