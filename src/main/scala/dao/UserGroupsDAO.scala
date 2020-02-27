@@ -58,13 +58,4 @@ class UserGroupsDAO @Inject()() {
   def getUserGroupRow(userId: Int, groupId: Int) = {
     allRows.filter(_.userId === userId).filter(_.groupId === groupId).result
   }
-
-  //TODO transactions
-  def getGroupsForUsers(userId: Int) = {
-    val query = (for {
-      groupsId <- allRows.filter(_.userId === userId).map(_.groupId).result
-      _ <- DBIO.seq(groupsId.map(groupId => groupsRows.filter(_.id === groupId).result): _*)
-    } yield ()).transactionally
-    query
-  }
 }

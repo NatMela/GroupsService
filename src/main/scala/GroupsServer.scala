@@ -1,20 +1,29 @@
-import controller.GroupsController
-import services.SwaggerDocService
+import controller.{GroupsController, GroupsDTO, JsonSupport}
+import services.{GroupsService, SwaggerDocService}
+import controller.{GroupWithUsersDTO, GroupsDTO, GroupsFromPage, GroupsOptionDTO, JsonSupport, LinksDTO, UserGroupsDTO, UserWithGroupsDTO, UsersDTO, UsersFromPage, UsersOptionDTO}
+
 
 import scala.concurrent.{Await, ExecutionContext, ExecutionContextExecutor, Future}
 import scala.concurrent.duration.Duration
 import scala.util.{Failure, Success}
 import akka.actor.ActorSystem
 import akka.http.scaladsl.Http
+import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport
 import akka.stream.ActorMaterializer
 import akka.http.scaladsl.server.RouteConcatenation
 import ch.megard.akka.http.cors.scaladsl.CorsDirectives.cors
 import com.google.inject.Guice
 import com.typesafe.config.ConfigFactory
 import config.DiModule
+import javax.jms.{Message, MessageListener, Session, TextMessage}
+import org.apache.activemq.ActiveMQConnectionFactory
+import spray.json.DefaultJsonProtocol
+
+import scala.concurrent.duration._
 
 
-object UserGroupsServer extends App with RouteConcatenation {
+
+object GroupsServer extends App with RouteConcatenation {
   implicit def executor: ExecutionContextExecutor = system.dispatcher
 
   val inject = Guice.createInjector(new DiModule())
@@ -31,7 +40,6 @@ object UserGroupsServer extends App with RouteConcatenation {
   val port = ConfigFactory.load().getInt("serverConf.port")
 
   val serverBinding: Future[Http.ServerBinding] = Http().bindAndHandle(routes, host, port)
-
 
   serverBinding.onComplete {
     case Success(bound) =>

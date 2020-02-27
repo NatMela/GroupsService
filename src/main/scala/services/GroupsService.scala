@@ -3,21 +3,119 @@ package services
 import java.time.LocalDate
 
 import akka.stream.scaladsl.Source
-import controller.{GroupWithUsersDTO, GroupsDTO, GroupsFromPage, GroupsOptionDTO, UsersDTO}
+import controller.{GroupWithUsersDTO, GroupsDTO, GroupsFromPage, GroupsOptionDTO, JsonSupport, UsersDTO}
 import dao.{GroupsDAO, GroupsRow, GroupsTable, UserGroupsDAO, UsersAndGroupsRow}
 
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.{Await, ExecutionContext, Future}
 import config._
-import com.google.inject.Inject
+import com.google.inject.{Guice, Inject}
+import diffson.lcs.Patience
+import javax.jms.{Message, MessageListener, Session, TextMessage}
+import org.apache.activemq.ActiveMQConnectionFactory
 import org.slf4j.LoggerFactory
 import slick.jdbc.PostgresProfile.api._
+import spray.json.JsValue
+import spray.json._
+import diffson.sprayJson._
+import diffson.diff
+import diffson._
+import diffson.jsonpatch.lcsdiff._
+
+import scala.concurrent.duration.{Duration, MILLISECONDS}
+import scala.util.{Failure, Success}
+
+class UserListener(u: GroupsService) extends MessageListener with JsonSupport {
+  override def onMessage(message: Message): Unit = {
+    if (message.isInstanceOf[TextMessage]) {
+      val s = message.asInstanceOf[TextMessage].getText
+      s match {
+        case msg if msg == "get_all_users" =>
+          val result = Await.result(u.getGroupById(1), Duration(1000, MILLISECONDS))
+          if (result.get.isInstanceOf[GroupsDTO]) {
+            u.usersClient.send(u.session.createTextMessage(result.get.asInstanceOf[GroupsDTO].toString))
+          }
+        case _ =>
+          Seq.empty[GroupsDTO]
+      }
+      println("Received text:" + s)
+    } else {
+      println("Received unknown")
+    }
+  }
+}
 
 class GroupsService @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroupsDAO, dbConfig: Db) {
 
   lazy val log = LoggerFactory.getLogger(classOf[GroupsService])
   implicit val ec = ExecutionContext.global
+  implicit val lcs = new Patience[JsValue]
 
   val maxGroupNumber = 16
+  val connFactory = new ActiveMQConnectionFactory()
+  val conn = connFactory.createConnection()
+  val session = conn.createSession(false, Session.AUTO_ACKNOWLEDGE)
+  val destUsersServer = session.createQueue("users_server")
+  val destUsersClient = session.createQueue("users_client")
+  val destGroupsServer = session.createQueue("groups_server")
+  val destGroupsClient = session.createQueue("groups_client")
+
+  val usersServer = session.createConsumer(destUsersServer)
+  val usersClient = session.createProducer(destUsersClient)
+  val groupsServer = session.createProducer(destGroupsServer)
+  val groupsClient = session.createConsumer(destGroupsClient)
+
+
+  //  val groupsListener = new UserListener(this)
+
+  conn.start()
+
+  def convertStrToInt(str: String): Option[Int] = {
+    try {
+      val result = str.toInt
+      Option(result)
+    } catch {
+      case e: Throwable => None
+    }
+  }
+
+  val listener = Future {
+    while (true) {
+      val message = usersServer.receive()
+      if (message.isInstanceOf[TextMessage]) {
+        val s = message.asInstanceOf[TextMessage].getText
+        s match {
+          case msg if convertStrToInt(msg).isDefined =>
+            val resultF = getGroupsForUser(msg.toInt)
+            resultF.map(result => {
+              usersClient.send(session.createTextMessage(result.toString))
+            })
+          case _ =>
+            Seq.empty[UsersDTO]
+        }
+        println("Received text:" + s)
+      } else {
+        println("Received unknown")
+      }
+    }
+  }
+
+
+  listener.onComplete {
+    case Success(value) => println(s"Got the callback, value = $value")
+    case Failure(e) => println(s"D'oh! The task failed: ${e.getMessage}")
+  }
+
+  //  usersServer.setMessageListener(groupsListener)
+
+
+  def getGroupsForUser(userId: Int): Future[Seq[GroupsDTO]] = {
+    val groupsIdsForUserF = dbConfig.db.run(userGroupsDAO.getAllGroupsForUser(userId))
+
+    groupsIdsForUserF.flatMap(groupsId => dbConfig.db.run(groupsDAO.getGroupsByIds(groupsId)).map {
+      groupsRows =>
+        groupsRows.map(groupRow => GroupsDTO(id = groupRow.id, title = groupRow.title, createdAt = Some(groupRow.createdAt.toString), description = groupRow.description))
+    })
+  }
 
   def getGroups: Future[Seq[GroupsDTO]] = {
     dbConfig.db().run(groupsDAO.getGroups()).map {
@@ -26,14 +124,6 @@ class GroupsService @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroupsDAO
           GroupsDTO(id = groupsRow.id, title = groupsRow.title, createdAt = Some(groupsRow.createdAt.toString), description = groupsRow.description))
     }
   }
-
-  /*def getGroupsStream() = {
-    val result = dbConfig.db().stream(groupsDAO.getGroups()).mapResult {
-      groupsRow =>
-        GroupsDTO(id = groupsRow.id, title = groupsRow.title, createdAt = Some(groupsRow.createdAt.toString), description = groupsRow.description)
-    }
-    Source.fromPublisher(result)
-  }*/
 
   def getGroupsFromPage(pageSize: Int, pageNumber: Int): Future[GroupsFromPage] = {
     val result = groupsDAO.getGroupsFromPage(pageNumber, pageSize)
@@ -87,27 +177,45 @@ class GroupsService @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroupsDAO
           case Some(groupRow) => Some(GroupsDTO(id = groupRow.id, createdAt = Some(groupRow.createdAt.toString), title = groupRow.title, description = groupRow.description))
         }
     }
+
+    val msg = session.createTextMessage(s"$groupId")
+    groupsServer.send(msg)
+    groupsClient.setMessageListener(null)
+    log.info("sent message")
+    println("sent message")
+    val answer = groupsClient.receive(1000) //.asInstanceOf[TextMessage].getText
+    log.info(s"receive answer ${answer}")
+
+    val result = answer match {
+      case message: TextMessage =>
+        println(s"receive answer ${message.getText}")
+        Future.successful(message.getText)
+
+      case _ =>
+        Future.successful("NotTextMessage")
+    }
     val usersIdsForGroupF = dbConfig.db.run(userGroupsDAO.getAllUsersForGroup(groupId))
-    /*val usersF = usersIdsForGroupF.flatMap(userId => dbConfig.db.run(userDAO.getUsersByIds(userId)).map {
-      userRows =>
-        userRows.map(userRow => UsersDTO(id = userRow.id, firstName = userRow.firstName, lastName = userRow.lastName, createdAt = Some(userRow.createdAt.toString), isActive = userRow.isActive))
-    })
-    val seqF = for {
-      users <- usersF
-      group <- groupF
-    } yield (users, group)
-    seqF.map { result =>
-      val (users, group) = result
-      group match {
-        case None =>
-          log.warn("Can't ge details about the group as there is no group with id {}", groupId)
-          None
-        case Some(group) => {
-          log.info("Details for group with id {} were found", groupId)
-          Some(GroupWithUsersDTO(group, users))
-        }
-      }
-    }*/
+
+    /* val usersF = usersIdsForGroupF.flatMap(userId => dbConfig.db.run(userDAO.getUsersByIds(userId)).map {
+       userRows =>
+         userRows.map(userRow => UsersDTO(id = userRow.id, firstName = userRow.firstName, lastName = userRow.lastName, createdAt = Some(userRow.createdAt.toString), isActive = userRow.isActive))
+     })
+     val seqF = for {
+       users <- usersF
+       group <- groupF
+     } yield (users, group)
+     seqF.map { result =>
+       val (users, group) = result
+       group match {
+         case None =>
+           log.warn("Can't ge details about the group as there is no group with id {}", groupId)
+           None
+         case Some(group) => {
+           log.info("Details for group with id {} were found", groupId)
+           Some(GroupWithUsersDTO(group, users))
+         }
+       }
+     }*/
     Future.successful(None)
   }
 
