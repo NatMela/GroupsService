@@ -4,8 +4,6 @@ version := "0.1"
 
 scalaVersion := "2.13.0"
 
-
-
 libraryDependencies ++= Seq(
   "com.typesafe.slick" %% "slick"           % "3.3.2",
   "org.postgresql" % "postgresql" % "42.1.1",
@@ -31,6 +29,7 @@ libraryDependencies += "ch.megard" %% "akka-http-cors" % "0.4.1"
 libraryDependencies += "io.pileworx" %% "akka-http-hal" % "1.2.5"
 libraryDependencies += "org.gnieh" %% f"diffson-spray-json" % "4.0.1"
 libraryDependencies += "org.typelevel" %% "cats-core" % "2.0.0"
+libraryDependencies += "org.apache.activemq" % "activemq-all" % "5.10.0"
 
 enablePlugins(FlywayPlugin)
 version := "0.0.1"
