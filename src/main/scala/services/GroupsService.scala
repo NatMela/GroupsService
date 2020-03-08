@@ -1,5 +1,7 @@
 package services
 
+import java.sql.Date
+import java.text.SimpleDateFormat
 import java.time.LocalDate
 
 import akka.stream.scaladsl.Source
@@ -167,6 +169,41 @@ class GroupsService @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroupsDAO
     }
   }
 
+  def convertToDto(row: Seq[String]): UsersDTO = {
+    println(row)
+    UsersDTO(id = strToOptionInt(row(0).tail), firstName = row(1), lastName = row(2), createdAt = strToOptionDate(row(3)), isActive = strToBool(row(4).substring(0, row(4).length - 1)))
+  }
+
+  def strToOptionInt(str: String): Option[Int] = {
+    str match {
+      case string if string.substring(0, 4) == "Some" =>
+        Option(string.substring(5, string.length - 1).toInt)
+      case _ => None
+    }
+  }
+
+  def strToBool(string: String): Boolean = {
+    string match {
+      case str if str == "true" => true
+      case _ => false
+    }
+  }
+
+  def strToOptionDate(str: String): Option[String] = {
+    str match {
+      case string if string.substring(0, 4) == "Some" =>
+        Option(string.substring(5, string.length - 1))
+      case _ => None
+    }
+  }
+
+  def stringConvertToSetDTO(inputString: String, dtoName: String): Seq[UsersDTO] = {
+    val setStrings: Seq[String] = inputString.substring(7, inputString.length - 1)
+      .split(dtoName).toSeq.tail
+    setStrings.map(row => row.split(",").toSeq)
+      .map(row => convertToDto(row))
+  }
+
   def getDetailsForGroup(groupId: Int): Future[Option[GroupWithUsersDTO]] = {
     val groupF: Future[Option[GroupsDTO]] = dbConfig.db.run(groupsDAO.getGroupById(groupId)).map {
       groupRows =>
@@ -186,7 +223,7 @@ class GroupsService @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroupsDAO
     val answer = groupsClient.receive(1000) //.asInstanceOf[TextMessage].getText
     log.info(s"receive answer ${answer}")
 
-    val result = answer match {
+    val resultF = answer match {
       case message: TextMessage =>
         println(s"receive answer ${message.getText}")
         Future.successful(message.getText)
@@ -194,29 +231,25 @@ class GroupsService @Inject()(groupsDAO: GroupsDAO, userGroupsDAO: UserGroupsDAO
       case _ =>
         Future.successful("NotTextMessage")
     }
-    val usersIdsForGroupF = dbConfig.db.run(userGroupsDAO.getAllUsersForGroup(groupId))
 
-    /* val usersF = usersIdsForGroupF.flatMap(userId => dbConfig.db.run(userDAO.getUsersByIds(userId)).map {
-       userRows =>
-         userRows.map(userRow => UsersDTO(id = userRow.id, firstName = userRow.firstName, lastName = userRow.lastName, createdAt = Some(userRow.createdAt.toString), isActive = userRow.isActive))
-     })
      val seqF = for {
-       users <- usersF
        group <- groupF
-     } yield (users, group)
-     seqF.map { result =>
-       val (users, group) = result
+       result <- resultF
+     } yield (result, group)
+     seqF.map { res =>
+       val (result, group) = res
+       val users = stringConvertToSetDTO(result,"UsersDTO")
        group match {
          case None =>
            log.warn("Can't ge details about the group as there is no group with id {}", groupId)
            None
          case Some(group) => {
            log.info("Details for group with id {} were found", groupId)
-           Some(GroupWithUsersDTO(group, users))
+           Some(GroupWithUsersDTO(group, users.toSeq))
          }
        }
-     }*/
-    Future.successful(None)
+     }
+
   }
 
   def updateGroupById(groupId: Int, groupRow: GroupsDTO): Future[Option[GroupsDTO]] = {
